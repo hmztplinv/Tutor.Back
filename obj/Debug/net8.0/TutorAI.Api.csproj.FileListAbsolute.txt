@@ -170,3 +170,4 @@ C:\Users\hmztp\source\repos\TutorAI.Api\bin\Debug\net8.0\Microsoft.Extensions.Co
 C:\Users\hmztp\source\repos\TutorAI.Api\bin\Debug\net8.0\Microsoft.Extensions.Diagnostics.dll
 C:\Users\hmztp\source\repos\TutorAI.Api\bin\Debug\net8.0\Microsoft.Extensions.Http.dll
 C:\Users\hmztp\source\repos\TutorAI.Api\bin\Debug\net8.0\Microsoft.Extensions.Options.ConfigurationExtensions.dll
+C:\Users\hmztp\source\repos\TutorAI.Api\obj\Debug\net8.0\TutorAI.Api.sourcelink.json

@@ -5,111 +5,143 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 
 
-namespace YourProjectNamespace.Controllers
+[ApiController]
+[Route("api/[controller]")]
+public class MessagesController : ControllerBase
 {
-    [ApiController]
-    [Route("api/[controller]")]
-    public class MessagesController : ControllerBase
+    private readonly ILlmService _llmService;
+    private readonly LanguageLearningDbContext _dbContext;
+
+    public MessagesController(ILlmService llmService, LanguageLearningDbContext dbContext)
     {
-        private readonly ILlmService _llmService;
-        private readonly LanguageLearningDbContext _dbContext;
+        _llmService = llmService;
+        _dbContext = dbContext;
+    }
 
-        public MessagesController(ILlmService llmService, LanguageLearningDbContext dbContext)
+    // GET: /api/messages?conversationId=12345
+    [HttpGet]
+    public IActionResult GetMessages([FromQuery] int conversationId)
+    {
+        var messages = _dbContext.UserMessages
+            .Where(m => m.ConversationId == conversationId)
+            .OrderBy(m => m.CreatedAt)
+            .ToList();
+
+        return Ok(messages);
+    }
+
+    // GET: /api/messages/conversations?userId=1
+    [HttpGet("conversations")]
+    public IActionResult GetDistinctConversations(int userId)
+    {
+        // Grupluyoruz ve en eski mesajın Title'ını başlık olarak alıyoruz.
+        var convs = _dbContext.UserMessages
+            .Where(m => m.UserId == userId)
+            .GroupBy(m => m.ConversationId)
+            .Select(g => new
+            {
+                ConversationId = g.Key,
+                Title = g.OrderBy(x => x.CreatedAt).FirstOrDefault().Title, // İlk mesaja ait Title
+                LastMessageTime = g.Max(x => x.CreatedAt)
+            })
+            .OrderByDescending(x => x.LastMessageTime)
+            .ToList();
+
+        return Ok(convs);
+    }
+
+    // POST: /api/messages
+    [HttpPost]
+    [HttpPost]
+    public async Task<IActionResult> PostMessage([FromBody] MessageDto dto)
+    {
+        // 1) Her zaman yeni ID mi? Yoksa eski ID devam mı?
+        // Eğer front-end conversationId=null gönderirse -> yeni ID
+        // Eğer conversationId varsa -> o ID'ye devam
+        int conversationId;
+        if (dto.ConversationId == null)
         {
-            _llmService = llmService;
-            _dbContext = dbContext;
+            // Yeni konuşma: her seferinde sıfırdan
+            conversationId = new Random().Next(10000, 99999);
+        }
+        else
+        {
+            // Mevcut konuşma devam
+            conversationId = dto.ConversationId.Value;
         }
 
-        // (A) Belirli bir ConversationId'ye ait tüm mesajları çekme
-        // Örn: GET /api/messages?conversationId=12345
-        [HttpGet]
-        public IActionResult GetMessages([FromQuery] int conversationId)
+        // 2) Yeni mesaj kaydı
+        // İlk mesajda (conversationId == null'dı) Title'ı doldurabiliriz.
+        var userMessage = new UserMessage
         {
-            var messages = _dbContext.UserMessages
-                .Where(m => m.ConversationId == conversationId)
-                .OrderBy(m => m.CreatedAt) // kronolojik sırayla
-                .ToList();
+            UserId = dto.UserId,
+            ConversationId = conversationId,
+            Title = (dto.ConversationId == null) ? dto.Title : null,
+            Message = dto.Message,
+            CreatedAt = DateTime.UtcNow
+        };
 
-            return Ok(messages);
+        _dbContext.UserMessages.Add(userMessage);
+        await _dbContext.SaveChangesAsync();
+
+        // 3) Son 2 mesaj (kısa hafıza)
+        var lastMessages = _dbContext.UserMessages
+            .Where(m => m.UserId == dto.UserId && m.ConversationId == conversationId)
+            .OrderByDescending(m => m.CreatedAt)
+            .Take(2)
+            .ToList();
+
+        // 4) System Prompt
+        var systemPrompt = "You are an English tutor. Help the user practice English. " +
+                           "Correct grammar mistakes and provide helpful feedback. " +
+                           "Keep the conversation natural and respond only to the latest user message. " +
+                           "Do not repeat past conversations unless the user explicitly asks for it. " +
+                           "Keep the answers short and contextual.";
+
+        var promptBuilder = new StringBuilder();
+        promptBuilder.AppendLine($"System: {systemPrompt}");
+
+        // 5) Sadece kullanıcı mesajlarını ekle
+        lastMessages.Reverse();
+        foreach (var msg in lastMessages)
+        {
+            promptBuilder.AppendLine($"User: {msg.Message}");
+        }
+        promptBuilder.AppendLine($"User: {dto.Message}");
+
+        // 6) LLM'den cevap al
+        var llmResponse = await _llmService.GetResponseFromLlama2Async(promptBuilder.ToString());
+
+        // 7) Cevabı kaydet
+        userMessage.Response = llmResponse;
+        _dbContext.UserMessages.Update(userMessage);
+        await _dbContext.SaveChangesAsync();
+
+        // 8) Front-end'e dön
+        return Ok(new
+        {
+            ConversationId = conversationId,
+            userMessage.Id,
+            userMessage.Message,
+            userMessage.Response
+        });
+    }
+
+
+
+    // Son mesaj 10 dk eskiyse yeni ID üret
+    private int GetCurrentConversationId(int userId)
+    {
+        var lastMessage = _dbContext.UserMessages
+            .Where(m => m.UserId == userId)
+            .OrderByDescending(m => m.CreatedAt)
+            .FirstOrDefault();
+
+        if (lastMessage == null || (DateTime.UtcNow - lastMessage.CreatedAt).TotalMinutes > 10)
+        {
+            return new Random().Next(10000, 99999);
         }
 
-        // (B) Yeni mesaj gönderme (ChatGPT benzeri)
-        [HttpPost]
-        public async Task<IActionResult> PostMessage([FromBody] MessageDto dto)
-        {
-            // 1) Yeni mesaj kaydı
-            // Eğer dto.ConversationId gelmediyse (null veya 0), GetCurrentConversationId() ile oluşturuyoruz
-            var conversationId = dto.ConversationId ?? GetCurrentConversationId(dto.UserId);
-
-            var userMessage = new UserMessage
-            {
-                UserId = dto.UserId,
-                ConversationId = conversationId,
-                Message = dto.Message,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _dbContext.UserMessages.Add(userMessage);
-            await _dbContext.SaveChangesAsync();
-
-            // 2) Son X mesajı çekelim (örneğin 2 veya 3)
-            var lastMessages = _dbContext.UserMessages
-                .Where(m => m.UserId == dto.UserId && m.ConversationId == conversationId)
-                .OrderByDescending(m => m.CreatedAt)
-                .Take(2)
-                .ToList();
-
-            // 3) System prompt
-            var systemPrompt = "You are an English tutor. Help the user practice English. " +
-                               "Correct grammar mistakes and provide helpful feedback. " +
-                               "Keep the conversation natural and respond only to the latest user message. " +
-                               "Do not repeat past conversations unless the user explicitly asks for it. " +
-                               "Keep the answers short and contextual.";
-
-            var promptBuilder = new StringBuilder();
-            promptBuilder.AppendLine($"System: {systemPrompt}");
-
-            // 4) Yalnızca kullanıcı mesajlarını ekleyelim (asistan cevaplarını değil)
-            lastMessages.Reverse(); // kronolojik sırayla
-            foreach (var msg in lastMessages)
-            {
-                promptBuilder.AppendLine($"User: {msg.Message}");
-            }
-            promptBuilder.AppendLine($"User: {dto.Message}"); // en yeni mesaj
-
-            // 5) LLM'den cevap al
-            var llmResponse = await _llmService.GetResponseFromLlama2Async(promptBuilder.ToString());
-
-            // 6) DB'de güncelle
-            userMessage.Response = llmResponse;
-            _dbContext.UserMessages.Update(userMessage);
-            await _dbContext.SaveChangesAsync();
-
-            // 7) Cevap olarak gönder
-            return Ok(new
-            {
-                ConversationId = conversationId,
-                userMessage.Id,
-                userMessage.Message,
-                userMessage.Response
-            });
-        }
-
-        // Konuşma ID’yi oluşturma veya bulma
-        private int GetCurrentConversationId(int userId)
-        {
-            var lastMessage = _dbContext.UserMessages
-                .Where(m => m.UserId == userId)
-                .OrderByDescending(m => m.CreatedAt)
-                .FirstOrDefault();
-
-            // 10 dk önceki mesajlardan sonra yeni konuşma başlatalım
-            if (lastMessage == null || (DateTime.UtcNow - lastMessage.CreatedAt).TotalMinutes > 10)
-            {
-                return new Random().Next(10000, 99999); 
-            }
-
-            return lastMessage.ConversationId;
-        }
+        return lastMessage.ConversationId;
     }
 }

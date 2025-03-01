@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "UtaMocfZM9SxG84zMO+u04KEJRNvbIuXENaPeFFmdVo=",
+  "Source": "TutorAI.Api",
+  "BasePath": "_content/TutorAI.Api",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}

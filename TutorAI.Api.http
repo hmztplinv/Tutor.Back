@@ -1,0 +1,6 @@
+@TutorAI.Api_HostAddress = http://localhost:5005
+
+GET {{TutorAI.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
